@@ -1,0 +1,170 @@
+#include "ESP8266WiFi.h"
+#include <SPI.h>
+#include <WiFiUdp.h>
+
+
+const char* host = "example.com";
+
+//ntp
+unsigned int localPort = 2390;      // local port to listen for UDP packets
+IPAddress timeServerIP; // time.nist.gov NTP server address
+const char* ntpServerName = "time.nist.gov";
+const int NTP_PACKET_SIZE = 48; // NTP time stamp is in the first 48 bytes of the message
+byte packetBuffer[ NTP_PACKET_SIZE]; // buffer to hold incoming and outgoing packets
+WiFiUDP udp; // A UDP instance to let us send and receive packets over UDP
+unsigned long unixtime;
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(0, OUTPUT);
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  delay(100);
+
+  Serial.println("Setup done");
+
+  delay(2000);
+
+}
+
+void loop() {
+
+  delay(500);
+
+
+  int n = WiFi.scanNetworks();
+  //  Serial.println("scan done");
+
+  delay(500);
+  if (n == 0)
+  {
+    //   Serial.println("no networks found");
+   
+  }
+  else
+  {
+    //    Serial.print(n);
+    //    Serial.println(" networks found");
+    delay(500);
+    for (int i = 0; i < n; ++i)
+    {
+            Serial.print(i + 1);
+            Serial.print(": ");
+            Serial.print(WiFi.SSID(i));
+            Serial.print(" (");
+            Serial.print(WiFi.RSSI(i));
+            Serial.print(") ");
+            Serial.print(WiFi.BSSIDstr(i));
+            Serial.print("  ");
+            Serial.println((WiFi.encryptionType(i) == ENC_TYPE_NONE)?" NONE":"*");
+     if (WiFi.SSID(i) != "ise_guest" && WiFi.SSID(i) != "xfinitywifi" && WiFi.SSID(i) != "CableWiFi" && WiFi.SSID(i) != "CoxWiFi") {        
+      if (WiFi.encryptionType(i) == ENC_TYPE_NONE) {
+        char ssid[50];
+        WiFi.SSID(i).toCharArray(ssid, 50);
+        WiFi.begin(ssid);
+        String mac = WiFi.BSSIDstr(i);
+        String fssid = WiFi.SSID(i);
+        mac.replace(":", "-");
+       
+        int count = 0;
+        while (WiFi.status() != WL_CONNECTED) {
+          delay(500);
+          count++;
+          //           Serial.print(".");
+        
+          if (count >= 100) {
+            //           Serial.println("Failed to Connect");
+            break;
+          }
+        }
+        if (WiFi.status() == WL_CONNECTED) {
+          /*         Serial.println("WiFi connected");
+                     Serial.println("IP address: ");
+                     Serial.println(WiFi.localIP());*/
+
+          // start NTP
+          udp.begin(localPort);
+          WiFi.hostByName(ntpServerName, timeServerIP);
+          sendNTPpacket(timeServerIP); // send an NTP packet to a time server
+          // wait to see if a reply is available
+          delay(2000);
+           int cb = udp.parsePacket();
+            if (!cb) {
+            } else {
+           // Serial.println(cb);
+            // We've received a packet, read the data from it
+            udp.read(packetBuffer, NTP_PACKET_SIZE); // read the packet into the buffer
+
+          //the timestamp starts at byte 40 of the received packet and is four bytes,
+          // or two words, long. First, esxtract the two words:
+
+          unsigned long highWord = word(packetBuffer[40], packetBuffer[41]);
+          unsigned long lowWord = word(packetBuffer[42], packetBuffer[43]);
+          // combine the four bytes (two words) into a long integer
+          // this is NTP time (seconds since Jan 1 1900):
+          unixtime = highWord << 16 | lowWord;
+          //Serial.print("Seconds since Jan 1 1900 = ");
+          //Serial.println(unixtime);
+            }
+          // Use WiFiClient class to create TCP connections
+          WiFiClient client;
+          const int httpPort = 80;
+          if (!client.connect(host, httpPort)) {
+            //                Serial.println("connection failed");
+           
+            return;
+          }
+
+          // We now create a URI for the request
+          String url = "/wifi?i=" + mac;
+                        Serial.print("Requesting URL: ");
+                        Serial.println(url);
+                        Serial.println(mac);
+                        Serial.println(fssid);
+                             
+          client.println(String("GET ") + url + "," + fssid + "," + unixtime +" HTTP/1.0\r\n\r\n");
+          delay(1000);
+          while (client.available())
+          {
+             Serial.write(client.read());
+             
+          }
+          
+          WiFi.disconnect();
+          while (WiFi.status() == WL_CONNECTED) {
+            delay(1000);
+          }
+                    Serial.println("WiFi disconnected");
+      }
+     }
+    }
+   }
+  }
+  // Wait a bit before scanning again
+  delay(5000);
+}
+
+// send an NTP request to the time server at the given address
+void sendNTPpacket(IPAddress& address) {
+  Serial.println("sending NTP packet...");
+  // set all bytes in the buffer to 0
+  memset(packetBuffer, 0, NTP_PACKET_SIZE);
+  // Initialize values needed to form NTP request
+  // (see URL above for details on the packets)
+  packetBuffer[0] = 0b11100011;   // LI, Version, Mode
+  packetBuffer[1] = 0;     // Stratum, or type of clock
+  packetBuffer[2] = 6;     // Polling Interval
+  packetBuffer[3] = 0xEC;  // Peer Clock Precision
+  // 8 bytes of zero for Root Delay & Root Dispersion
+  packetBuffer[12]  = 49;
+  packetBuffer[13]  = 0x4E;
+  packetBuffer[14]  = 49;
+  packetBuffer[15]  = 52;
+
+  // all NTP fields have been given values, now
+  // you can send a packet requesting a timestamp:
+  udp.beginPacket(address, 123); //NTP requests are to port 123
+  udp.write(packetBuffer, NTP_PACKET_SIZE);
+  udp.endPacket();
+}
